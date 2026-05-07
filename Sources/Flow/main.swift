@@ -6,7 +6,6 @@ import Combine
 
 // MARK: - Shared state
 
-@MainActor
 final class FlowState: ObservableObject {
     enum Phase { case loading, ready, recording, transcribing }
 
@@ -411,6 +410,7 @@ final class TextInjector {
 
 // MARK: - App
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let flowState = FlowState()
     private let hotkey = HotkeyManager()
@@ -420,27 +420,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var statusItem: NSStatusItem!
     private var window: NSWindow?
 
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        setupStatusItem()
-        setupWindow()
-
+    nonisolated func applicationDidFinishLaunching(_ notification: Notification) {
         Task { @MainActor in
-            await transcriber.load()
-            flowState.phase = .ready
-            updateMenubarIcon()
-        }
+            self.setupStatusItem()
+            self.setupWindow()
 
-        hotkey.onStart = { [weak self] in self?.startRecording() }
-        hotkey.onStop = { [weak self] in self?.stopAndInject() }
-        hotkey.start()
+            await self.transcriber.load()
+            self.flowState.phase = .ready
+            self.updateMenubarIcon()
+
+            self.hotkey.onStart = { [weak self] in
+                Task { @MainActor in self?.startRecording() }
+            }
+            self.hotkey.onStop = { [weak self] in
+                Task { @MainActor in self?.stopAndInject() }
+            }
+            self.hotkey.start()
+        }
     }
 
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+    nonisolated func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         return false
     }
 
-    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !flag { showWindow() }
+    nonisolated func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        Task { @MainActor in
+            if !flag { self.showWindow() }
+        }
         return true
     }
 
