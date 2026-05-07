@@ -12,7 +12,7 @@ final class FlowState: ObservableObject {
     @Published var phase: Phase = .loading
     @Published var lastTranscription: String = ""
     @Published var detectedLanguage: String = ""
-    @Published var modelName: String = "whisper-small"
+    @Published var modelName: String = "whisper-base"
 
     var iconName: String {
         switch phase {
@@ -43,8 +43,8 @@ final class FlowState: ObservableObject {
 
     var statusSubtitle: String {
         switch phase {
-        case .loading: return "Erster Start lädt \(modelName) (~480 MB)"
-        case .ready: return "Multilingual, automatische Sprache"
+        case .loading: return "Erster Start lädt \(modelName) (~140 MB)"
+        case .ready: return "Deutsch, lokal auf Apple Silicon"
         case .recording: return "Sprich frei"
         case .transcribing: return "Whisper läuft lokal"
         }
@@ -359,7 +359,7 @@ final class Transcriber {
 
     func load() async {
         do {
-            pipe = try await WhisperKit(model: "openai_whisper-small", verbose: false)
+            pipe = try await WhisperKit(model: "openai_whisper-base", verbose: false)
         } catch {
             print("Flow: WhisperKit load failed: \(error)")
         }
@@ -369,10 +369,17 @@ final class Transcriber {
         guard let pipe else { return ("", "") }
         guard samples.count > 1600 else { return ("", "") }
         do {
-            let results = try await pipe.transcribe(audioArray: samples)
+            let options = DecodingOptions(
+                task: .transcribe,
+                language: "de",
+                temperature: 0.0,
+                usePrefillPrompt: true,
+                skipSpecialTokens: true,
+                withoutTimestamps: true
+            )
+            let results = try await pipe.transcribe(audioArray: samples, decodeOptions: options)
             let text = results.first?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let lang = results.first?.language ?? ""
-            return (text, lang)
+            return (text, "de")
         } catch {
             print("Flow: transcribe failed: \(error)")
             return ("", "")
