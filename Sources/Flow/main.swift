@@ -410,7 +410,6 @@ final class TextInjector {
 
 // MARK: - App
 
-@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let flowState = FlowState()
     private let hotkey = HotkeyManager()
@@ -420,33 +419,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var statusItem: NSStatusItem!
     private var window: NSWindow?
 
-    nonisolated func applicationDidFinishLaunching(_ notification: Notification) {
-        Task { @MainActor in
-            self.setupStatusItem()
-            self.setupWindow()
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        setupStatusItem()
+        setupWindow()
 
-            await self.transcriber.load()
-            self.flowState.phase = .ready
-            self.updateMenubarIcon()
-
-            self.hotkey.onStart = { [weak self] in
-                Task { @MainActor in self?.startRecording() }
+        Task {
+            await transcriber.load()
+            await MainActor.run {
+                self.flowState.phase = .ready
+                self.updateMenubarIcon()
             }
-            self.hotkey.onStop = { [weak self] in
-                Task { @MainActor in self?.stopAndInject() }
-            }
-            self.hotkey.start()
         }
+
+        hotkey.onStart = { [weak self] in self?.startRecording() }
+        hotkey.onStop = { [weak self] in self?.stopAndInject() }
+        hotkey.start()
     }
 
-    nonisolated func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         return false
     }
 
-    nonisolated func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        Task { @MainActor in
-            if !flag { self.showWindow() }
-        }
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag { showWindow() }
         return true
     }
 
@@ -512,7 +507,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
-    @MainActor
     private func startRecording() {
         guard flowState.phase == .ready else { return }
         flowState.phase = .recording
@@ -524,21 +518,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
-    @MainActor
     private func stopAndInject() {
         guard flowState.phase == .recording else { return }
         let samples = recorder.stop()
         flowState.phase = .transcribing
         updateMenubarIcon()
-        Task { @MainActor in
+        Task {
             let result = await transcriber.transcribe(samples)
-            self.injector.inject(result.text)
-            if !result.text.isEmpty {
-                self.flowState.lastTranscription = result.text
-                self.flowState.detectedLanguage = result.language
+            await MainActor.run {
+                self.injector.inject(result.text)
+                if !result.text.isEmpty {
+                    self.flowState.lastTranscription = result.text
+                    self.flowState.detectedLanguage = result.language
+                }
+                self.flowState.phase = .ready
+                self.updateMenubarIcon()
             }
-            self.flowState.phase = .ready
-            self.updateMenubarIcon()
         }
     }
 }
