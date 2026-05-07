@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "Flow",
-    platforms: [.macOS(.v13)],
+    platforms: [.macOS(.v14)],
     dependencies: [
         .package(url: "https://github.com/argmaxinc/WhisperKit", .upToNextMinor(from: "0.9.0"))
     ],

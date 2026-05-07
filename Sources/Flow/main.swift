@@ -1,6 +1,229 @@
 import Cocoa
+import SwiftUI
 import AVFoundation
 import WhisperKit
+import Combine
+
+// MARK: - Shared state
+
+@MainActor
+final class FlowState: ObservableObject {
+    enum Phase { case loading, ready, recording, transcribing }
+
+    @Published var phase: Phase = .loading
+    @Published var lastTranscription: String = ""
+    @Published var detectedLanguage: String = ""
+    @Published var modelName: String = "whisper-small"
+
+    var iconName: String {
+        switch phase {
+        case .loading: return "hourglass"
+        case .ready: return "mic"
+        case .recording: return "waveform"
+        case .transcribing: return "ellipsis.circle"
+        }
+    }
+
+    var iconColor: Color {
+        switch phase {
+        case .loading: return .secondary
+        case .ready: return .accentColor
+        case .recording: return .red
+        case .transcribing: return .orange
+        }
+    }
+
+    var statusTitle: String {
+        switch phase {
+        case .loading: return "Lade Modell"
+        case .ready: return "Bereit"
+        case .recording: return "Höre zu"
+        case .transcribing: return "Transkribiere"
+        }
+    }
+
+    var statusSubtitle: String {
+        switch phase {
+        case .loading: return "Erster Start lädt \(modelName) (~480 MB)"
+        case .ready: return "Multilingual, automatische Sprache"
+        case .recording: return "Sprich frei"
+        case .transcribing: return "Whisper läuft lokal"
+        }
+    }
+
+    func copyLastToClipboard() {
+        guard !lastTranscription.isEmpty else { return }
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(lastTranscription, forType: .string)
+    }
+}
+
+// MARK: - SwiftUI views
+
+struct VisualEffect: NSViewRepresentable {
+    let material: NSVisualEffectView.Material
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let v = NSVisualEffectView()
+        v.material = material
+        v.blendingMode = .behindWindow
+        v.state = .active
+        return v
+    }
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
+}
+
+struct StatusHero: View {
+    @ObservedObject var state: FlowState
+
+    var body: some View {
+        VStack(spacing: 18) {
+            ZStack {
+                Circle()
+                    .fill(state.iconColor.opacity(0.12))
+                    .frame(width: 148, height: 148)
+
+                Circle()
+                    .stroke(state.iconColor.opacity(0.25), lineWidth: 1)
+                    .frame(width: 148, height: 148)
+
+                Image(systemName: state.iconName)
+                    .font(.system(size: 58, weight: .light))
+                    .foregroundStyle(state.iconColor)
+                    .contentTransition(.symbolEffect(.replace))
+                    .symbolEffect(.variableColor.iterative.reversing,
+                                  options: .repeating,
+                                  isActive: state.phase == .recording || state.phase == .transcribing)
+            }
+
+            VStack(spacing: 4) {
+                Text(state.statusTitle)
+                    .font(.system(size: 22, weight: .semibold))
+                    .contentTransition(.opacity)
+                Text(state.statusSubtitle)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .contentTransition(.opacity)
+            }
+        }
+    }
+}
+
+struct HotkeyCard: View {
+    var body: some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 6) {
+                KeyCap("Fn")
+                Text("halten + sprechen + loslassen")
+                    .foregroundStyle(.secondary)
+            }
+            HStack(spacing: 6) {
+                Text("oder")
+                    .foregroundStyle(.tertiary)
+                KeyCap("Fn")
+                Text("tap • sprechen •")
+                    .foregroundStyle(.secondary)
+                KeyCap("Fn")
+                Text("tap")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .font(.system(size: 13))
+        .padding(.vertical, 14)
+        .padding(.horizontal, 18)
+        .frame(maxWidth: .infinity)
+        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
+struct KeyCap: View {
+    let label: String
+    init(_ label: String) { self.label = label }
+    var body: some View {
+        Text(label)
+            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 5))
+            .overlay(
+                RoundedRectangle(cornerRadius: 5)
+                    .strokeBorder(.quaternary, lineWidth: 0.5)
+            )
+    }
+}
+
+struct LastTranscriptionCard: View {
+    @ObservedObject var state: FlowState
+    @State private var copied = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("LETZTE DIKTION")
+                    .font(.system(size: 10, weight: .bold))
+                    .tracking(1.4)
+                    .foregroundStyle(.tertiary)
+                if !state.detectedLanguage.isEmpty {
+                    Text(state.detectedLanguage.uppercased())
+                        .font(.system(size: 10, weight: .bold))
+                        .tracking(1.4)
+                        .foregroundStyle(.tertiary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 4))
+                }
+                Spacer()
+                Button {
+                    state.copyLastToClipboard()
+                    copied = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { copied = false }
+                } label: {
+                    Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(copied ? .green : .secondary)
+                        .contentTransition(.symbolEffect(.replace))
+                }
+                .buttonStyle(.plain)
+                .disabled(state.lastTranscription.isEmpty)
+            }
+            Text(state.lastTranscription.isEmpty ? "Noch nichts diktiert" : state.lastTranscription)
+                .font(.system(size: 13))
+                .foregroundStyle(state.lastTranscription.isEmpty ? .tertiary : .primary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+                .lineLimit(4)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
+struct ContentView: View {
+    @ObservedObject var state: FlowState
+
+    var body: some View {
+        ZStack {
+            VisualEffect(material: .hudWindow)
+                .ignoresSafeArea()
+
+            VStack(spacing: 24) {
+                Spacer(minLength: 12)
+                StatusHero(state: state)
+                    .animation(.smooth(duration: 0.35), value: state.phase)
+                Spacer(minLength: 0)
+                HotkeyCard()
+                LastTranscriptionCard(state: state)
+                    .animation(.smooth(duration: 0.3), value: state.lastTranscription)
+            }
+            .padding(.horizontal, 28)
+            .padding(.top, 36)
+            .padding(.bottom, 24)
+        }
+        .frame(width: 420, height: 580)
+    }
+}
 
 // MARK: - Hotkey (Fn key, dual-mode: hold-to-talk OR tap-toggle)
 
@@ -8,12 +231,12 @@ final class HotkeyManager {
     var onStart: () -> Void = {}
     var onStop: () -> Void = {}
 
-    private enum State {
+    private enum InternalState {
         case idle
         case recording(start: Date, toggleArmed: Bool)
     }
 
-    private var state: State = .idle
+    private var state: InternalState = .idle
     private var fnDown = false
     private var tap: CFMachPort?
     private let holdThreshold: TimeInterval = 0.5
@@ -36,7 +259,7 @@ final class HotkeyManager {
             },
             userInfo: selfPtr
         ) else {
-            print("Flow: failed to create event tap. Grant Accessibility permission in System Settings.")
+            print("Flow: failed to create event tap. Grant Accessibility permission.")
             return
         }
 
@@ -54,9 +277,8 @@ final class HotkeyManager {
         case (.idle, true):
             state = .recording(start: Date(), toggleArmed: false)
             onStart()
-
         case (.recording(let start, let armed), false):
-            if armed { return } // toggle mode: ignore release
+            if armed { return }
             let duration = Date().timeIntervalSince(start)
             if duration >= holdThreshold {
                 state = .idle
@@ -64,20 +286,18 @@ final class HotkeyManager {
             } else {
                 state = .recording(start: start, toggleArmed: true)
             }
-
         case (.recording(_, let armed), true):
             if armed {
                 state = .idle
                 onStop()
             }
-
         default:
             break
         }
     }
 }
 
-// MARK: - Audio recorder (16kHz mono float)
+// MARK: - Audio recorder
 
 final class AudioRecorder {
     private let engine = AVAudioEngine()
@@ -133,7 +353,7 @@ final class AudioRecorder {
     }
 }
 
-// MARK: - Transcriber (WhisperKit)
+// MARK: - Transcriber
 
 final class Transcriber {
     private var pipe: WhisperKit?
@@ -146,20 +366,22 @@ final class Transcriber {
         }
     }
 
-    func transcribe(_ samples: [Float]) async -> String {
-        guard let pipe else { return "" }
-        guard samples.count > 1600 else { return "" } // skip <100ms clips
+    func transcribe(_ samples: [Float]) async -> (text: String, language: String) {
+        guard let pipe else { return ("", "") }
+        guard samples.count > 1600 else { return ("", "") }
         do {
             let results = try await pipe.transcribe(audioArray: samples)
-            return results.first?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let text = results.first?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let lang = results.first?.language ?? ""
+            return (text, lang)
         } catch {
             print("Flow: transcribe failed: \(error)")
-            return ""
+            return ("", "")
         }
     }
 }
 
-// MARK: - Text injector (clipboard + Cmd-V into focused app)
+// MARK: - Text injector
 
 final class TextInjector {
     func inject(_ text: String) {
@@ -170,7 +392,7 @@ final class TextInjector {
         pb.setString(text, forType: .string)
 
         let src = CGEventSource(stateID: .combinedSessionState)
-        let vKey: CGKeyCode = 9 // V
+        let vKey: CGKeyCode = 9
         let down = CGEvent(keyboardEventSource: src, virtualKey: vKey, keyDown: true)
         down?.flags = .maskCommand
         let up = CGEvent(keyboardEventSource: src, virtualKey: vKey, keyDown: false)
@@ -189,36 +411,23 @@ final class TextInjector {
 
 // MARK: - App
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
-    private var statusItem: NSStatusItem!
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+    private let flowState = FlowState()
     private let hotkey = HotkeyManager()
     private let recorder = AudioRecorder()
     private let transcriber = Transcriber()
     private let injector = TextInjector()
-    private var isRecording = false
-    private var isReady = false
+    private var statusItem: NSStatusItem!
+    private var window: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        setIcon("hourglass")
+        setupStatusItem()
+        setupWindow()
 
-        let menu = NSMenu()
-        let status = NSMenuItem(title: "Loading model...", action: nil, keyEquivalent: "")
-        status.tag = 1
-        menu.addItem(status)
-        menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Quit Flow", action: #selector(NSApp.terminate(_:)), keyEquivalent: "q"))
-        statusItem.menu = menu
-
-        Task {
+        Task { @MainActor in
             await transcriber.load()
-            await MainActor.run {
-                self.isReady = true
-                self.setIcon("mic")
-                if let item = self.statusItem.menu?.item(withTag: 1) {
-                    item.title = "Ready (hold or tap Fn)"
-                }
-            }
+            flowState.phase = .ready
+            updateMenubarIcon()
         }
 
         hotkey.onStart = { [weak self] in self?.startRecording() }
@@ -226,34 +435,104 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkey.start()
     }
 
-    private func setIcon(_ symbol: String) {
-        let cfg = NSImage.SymbolConfiguration(pointSize: 14, weight: .regular)
-        statusItem.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Flow")?
-            .withSymbolConfiguration(cfg)
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        return false
     }
 
-    private func startRecording() {
-        guard isReady, !isRecording else { return }
-        isRecording = true
-        setIcon("mic.fill")
-        do { try recorder.start() } catch {
-            print("Flow: record start failed: \(error)")
-            isRecording = false
-            setIcon("mic")
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag { showWindow() }
+        return true
+    }
+
+    private func setupStatusItem() {
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        statusItem.button?.target = self
+        statusItem.button?.action = #selector(statusItemClicked)
+        statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        updateMenubarIcon()
+    }
+
+    @objc private func statusItemClicked(_ sender: Any?) {
+        if let event = NSApp.currentEvent, event.type == .rightMouseUp {
+            let menu = NSMenu()
+            menu.addItem(NSMenuItem(title: "Flow zeigen", action: #selector(showWindowAction), keyEquivalent: ""))
+            menu.addItem(.separator())
+            menu.addItem(NSMenuItem(title: "Flow beenden", action: #selector(NSApp.terminate(_:)), keyEquivalent: "q"))
+            statusItem.menu = menu
+            statusItem.button?.performClick(nil)
+            statusItem.menu = nil
+        } else {
+            toggleWindow()
         }
     }
 
+    @objc private func showWindowAction() { showWindow() }
+
+    private func updateMenubarIcon() {
+        let cfg = NSImage.SymbolConfiguration(pointSize: 14, weight: .regular)
+        let symbolName = flowState.iconName
+        statusItem.button?.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: "Flow")?
+            .withSymbolConfiguration(cfg)
+    }
+
+    private func setupWindow() {
+        let view = ContentView(state: flowState)
+        let host = NSHostingController(rootView: view)
+        let win = NSWindow(contentViewController: host)
+        win.styleMask = [.titled, .closable, .miniaturizable, .fullSizeContentView]
+        win.titleVisibility = .hidden
+        win.titlebarAppearsTransparent = true
+        win.isMovableByWindowBackground = true
+        win.title = "Flow"
+        win.delegate = self
+        win.center()
+        win.isReleasedWhenClosed = false
+        self.window = win
+        showWindow()
+    }
+
+    private func showWindow() {
+        guard let window else { return }
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func toggleWindow() {
+        guard let window else { return }
+        if window.isVisible {
+            window.orderOut(nil)
+        } else {
+            showWindow()
+        }
+    }
+
+    @MainActor
+    private func startRecording() {
+        guard flowState.phase == .ready else { return }
+        flowState.phase = .recording
+        updateMenubarIcon()
+        do { try recorder.start() } catch {
+            print("Flow: record start failed: \(error)")
+            flowState.phase = .ready
+            updateMenubarIcon()
+        }
+    }
+
+    @MainActor
     private func stopAndInject() {
-        guard isRecording else { return }
-        isRecording = false
+        guard flowState.phase == .recording else { return }
         let samples = recorder.stop()
-        setIcon("ellipsis.circle")
-        Task {
-            let text = await transcriber.transcribe(samples)
-            await MainActor.run {
-                self.injector.inject(text)
-                self.setIcon("mic")
+        flowState.phase = .transcribing
+        updateMenubarIcon()
+        Task { @MainActor in
+            let result = await transcriber.transcribe(samples)
+            self.injector.inject(result.text)
+            if !result.text.isEmpty {
+                self.flowState.lastTranscription = result.text
+                self.flowState.detectedLanguage = result.language
             }
+            self.flowState.phase = .ready
+            self.updateMenubarIcon()
         }
     }
 }
@@ -263,5 +542,5 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate
-app.setActivationPolicy(.accessory)
+app.setActivationPolicy(.regular)
 app.run()
