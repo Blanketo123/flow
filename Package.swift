@@ -5,7 +5,7 @@ let package = Package(
     name: "Flow",
     platforms: [.macOS(.v13)],
     dependencies: [
-        .package(url: "https://github.com/argmaxinc/WhisperKit", from: "0.9.0")
+        .package(url: "https://github.com/argmaxinc/WhisperKit", .upToNextMinor(from: "0.9.0"))
     ],
     targets: [
         .executableTarget(
