@@ -1,0 +1,4 @@
+.build/
+.swiftpm/
+Flow.app/
+Package.resolved

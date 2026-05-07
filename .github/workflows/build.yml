@@ -1,0 +1,38 @@
+name: Build Flow.app
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          swift --version
+          sw_vers
+
+      - name: Build Flow.app
+        run: ./bundle.sh
+
+      - name: Strip quarantine + zip
+        run: |
+          xattr -cr Flow.app || true
+          ditto -c -k --keepParent Flow.app Flow.zip
+          ls -lh Flow.zip
+
+      - name: Publish rolling "latest" release
+        uses: marvinpinto/action-automatic-releases@latest
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          automatic_release_tag: latest
+          prerelease: true
+          title: "Flow latest build"
+          files: Flow.zip
