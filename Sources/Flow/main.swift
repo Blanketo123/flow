@@ -140,7 +140,7 @@ final class Transcriber {
 
     func load() async {
         do {
-            pipe = try await WhisperKit(model: "base", verbose: false)
+            pipe = try await WhisperKit(model: "openai_whisper-small", verbose: false)
         } catch {
             print("Flow: WhisperKit load failed: \(error)")
         }
